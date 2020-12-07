@@ -42,18 +42,9 @@ if __name__ == '__main__':
     max_iteration = 3000001
     args = parse_args()
 
-    weight = cfg.LOCAL_DATA + '/Weights/' + args.model + '/HOI_iter_' + str(args.iteration) + '.ckpt.index'
 
-    if os.path.exists(weight):
-        output_file = cfg.LOCAL_DATA + '/Results/' + str(args.iteration) + '_' + args.model + '_tin.pkl'
-        os.system('python tools/Test_VCL_ResNet_HICO.py --model ' + args.model + ' --num_iteration ' + str(args.iteration))
-        if args.model.__contains__('R_V'):
-            os.system(
-                'cd Data/ho-rcnn/;python ../../scripts/postprocess_test.py --model ' + args.model + ' --num_iteration ' + str(
-                    args.iteration) + ' --fuse_type v')
-        else:
-            os.system(
-                'cd Data/ho-rcnn/;python ../../scripts/postprocess_test.py --model ' + args.model + ' --num_iteration ' + str(
-                    args.iteration) + ' --fuse_type spv')
-    else:
-        raise Exception('weight do not exist')
+    output_file = cfg.LOCAL_DATA + '/Results/' + str(args.iteration) + '_' + args.model + '_tin.pkl'
+    os.system('python tools/Test_ResNet_HICO.py --model ' + args.model + ' --num_iteration ' + str(args.iteration))
+    os.system(
+        'cd Data/ho-rcnn/;python '+cfg.ROOT_DIR+'/scripts/postprocess.py --model ' + args.model + ' --num_iteration ' + str(
+            args.iteration) + ' --fuse_type spv')

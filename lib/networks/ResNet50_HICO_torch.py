@@ -190,29 +190,38 @@ class HICO_HOI(nn.Module):
 
 
         import torchvision
-        fpn_model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+        if model_name.__contains__('fpn'):
+            fpn_model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+            fpn_model = fpn_model.backbone.body
+            self.base_model = nn.Sequential(*list(fpn_model.children())[:-1])
+        else:
+            fpn_model = models.resnet50(pretrained=True)
+            self.base_model = nn.Sequential(*list(fpn_model.children())[0:7])
+        self.flat = Flatten()
         # import ipdb
         # ipdb.set_trace()
-        self.base_model = nn.Sequential(fpn_model.transform, *list(fpn_model.backbone.body.children())[:-1])
 
 
-        self.h_block = fpn_model.backbone.body.layer4
+
+        self.h_block = fpn_model.layer4
         # print(self.h_block)
         import copy
         self.o_block = copy.deepcopy(self.h_block) # get a new instance
         # print(self.o_block,)
         # self.o_block.load_state_dict(self.h_block.state_dict()) # copy weights and stuff
-        self.v_block = fpn_model.backbone.body.layer4
+        # self.v_block = fpn_model.layer4
 
         self.Conv_sp = nn.Sequential(
-            nn.Conv2d(2, 64, kernel_size=(5, 5), stride=(1, 1), bias=False),
-            nn.BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.Conv2d(2, 64, kernel_size=(5, 5), stride=(1, 1), bias=True),
+            # nn.BatchNorm2d(64, eps=1e-05, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=False),
             # nn.AdaptiveMaxPool2d([2, 2]),
             nn.MaxPool2d([2, 2]),
-            nn.Conv2d(64, 32, kernel_size=(5, 5), stride=(1, 1), bias=False),
-            nn.BatchNorm2d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d([2, 2]),
+            nn.Conv2d(64, 32, kernel_size=(5, 5), stride=(1, 1), bias=True),
+            # nn.BatchNorm2d(32, eps=1e-05, affine=True, track_running_stats=True),
             nn.ReLU(inplace=False),
+            nn.MaxPool2d([2, 2]),
+            # nn.ReLU(inplace=False),
             Flatten(),
         )
         # conv1_sp = slim.conv2d(self.spatial[:, :, :, 0:ends], 64, [5, 5], padding='VALID', scope='conv1_sp')
@@ -223,10 +232,12 @@ class HICO_HOI(nn.Module):
 
         self.HOI_MLP = nn.Sequential(
             nn.Linear(2048*2, self.num_fc, bias=False),
-            nn.BatchNorm1d(self.num_fc, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.BatchNorm1d(self.num_fc, eps=1e-05, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.5),
             nn.Linear(self.num_fc, self.num_fc, bias=False),
-            nn.BatchNorm1d(self.num_fc, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.BatchNorm1d(self.num_fc, eps=1e-05, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.5)
         )
         self.HOI_classifier = nn.Sequential(
@@ -235,10 +246,12 @@ class HICO_HOI(nn.Module):
         )
         self.sp_MLP = nn.Sequential(
             nn.Linear(7456, self.num_fc, bias=False), # 5708
-            nn.BatchNorm1d(self.num_fc, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.BatchNorm1d(self.num_fc, eps=1e-05, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.5),
             nn.Linear(self.num_fc, self.num_fc, bias=False),
-            nn.BatchNorm1d(self.num_fc, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.BatchNorm1d(self.num_fc, eps=1e-05, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=False),
             nn.Dropout(0.5)
         )
         self.sp_classifier = nn.Sequential(
@@ -247,37 +260,15 @@ class HICO_HOI(nn.Module):
 
         self.loss = torch.nn.BCEWithLogitsLoss()
 
-    def init_table(self):
-        pass
-
-    def set_ph(self, image, image_id, num_pos, Human_augmented, Object_augmented, action_HO, sp):
-        if image is not None: self.image = image
-        if image_id is not None: self.image_id = image_id
-        if sp is not None: self.spatial = sp
-        if Human_augmented is not None: self.H_boxes = Human_augmented
-        if Object_augmented is not None: self.O_boxes = Object_augmented
-        if action_HO is not None: gt_class_HO = action_HO
-        self.H_num = num_pos
-
-        # self.reset_classes()
-
-    # def reset_classes(self):
-    #     from ult.tools import get_convert_matrix
-    #     verb_to_HO_matrix, obj_to_HO_matrix = get_convert_matrix(self.verb_num_classes, self.obj_num_classes)
-    #     self.obj_to_HO_matrix = tf.constant(obj_to_HO_matrix, tf.float32)
-    #     self.verb_to_HO_matrix = tf.constant(verb_to_HO_matrix, tf.float32)
-    #     self.gt_obj_class = tf.cast(tf.matmul(gt_class_HO, self.obj_to_HO_matrix, transpose_b=True) > 0,
-    #                                 tf.float32)
-    #     self.gt_verb_class = tf.cast(tf.matmul(gt_class_HO, self.verb_to_HO_matrix, transpose_b=True) > 0,
-    #                                  tf.float32)
-
     def image_to_head(self, is_training, images):
         # import ipdb
         # ipdb.set_trace()
-        tmp = self.base_model[0](images)[0].tensors
+        # tmp = self.base_model[0](images)[0].tensors
+        # tmp = self.base_model[0].normalize(images)
+        # self.base_model[0].normalize(images)
         from torchvision.models.detection.image_list import ImageList
-        return self.base_model[1:](images)
-        # return self.base_model(images)
+        # return self.base_model[1:](tmp)
+        return self.base_model(images)
 
     def sp_to_head(self, spatial):
         # import ipdb
@@ -288,6 +279,8 @@ class HICO_HOI(nn.Module):
         return self.h_block(pool5_H), self.o_block(pool5_O)
 
     def crop_pool_layer(self, bottom, rois, name):
+        # import ipdb;ipdb.set_trace()
+
         from torchvision.ops import roi_pool
         result = roi_pool(
             bottom, rois,
@@ -335,11 +328,11 @@ class HICO_HOI(nn.Module):
         self.predictions["cls_score_sp"] = cls_score_sp
         self.predictions["cls_prob_sp"] = cls_prob_sp
 
-        return cls_prob_sp
+        return cls_score_sp
 
 
     def region_classification_ho(self, fc7_verbs, is_training, initializer, name, nameprefix = ''):
-        cls_score_hoi = self.sp_classifier(fc7_verbs)
+        cls_score_hoi = self.HOI_classifier(fc7_verbs)
         cls_prob_hoi = torch.sigmoid(cls_score_hoi)
         self.predictions[nameprefix + "cls_score_hoi"] = cls_score_hoi
         self.predictions[nameprefix + "cls_prob_hoi"] = cls_prob_hoi
@@ -351,7 +344,7 @@ class HICO_HOI(nn.Module):
                 self.predictions[nameprefix + "cls_prob_HO"] = cls_prob_hoi if nameprefix == '' else 0
             else:
                 self.predictions[nameprefix+"cls_prob_HO"] = self.predictions["cls_prob_sp"] * cls_prob_hoi if nameprefix =='' else 0
-        return cls_prob_hoi
+        return cls_score_hoi
 
 
     def get_compose_boxes(self, h_boxes, o_boxes):
@@ -375,9 +368,16 @@ class HICO_HOI(nn.Module):
     def forward(self, im_orig, image_id, num_pos, H_boxes, O_boxes, action_HO, Pattern, is_training):
         num_stop = self.get_num_stop(num_pos, H_boxes)
         # ResNet Backbone
+        img_w = im_orig.shape[2]
+        img_h = im_orig.shape[3]
+
 
         head = self.image_to_head(is_training, im_orig)
         sp = self.sp_to_head(Pattern)
+
+        H_boxes = self.convert_rois(H_boxes, head, img_h, img_w)
+        O_boxes = self.convert_rois(O_boxes, head, img_h, img_w)
+
         cboxes = self.get_compose_boxes(H_boxes[:num_stop] if self.model_name.__contains__('VCOCO') else H_boxes, O_boxes)
         pool5_O = self.crop_pool_layer(head, O_boxes, 'Crop_O')
         # import ipdb
@@ -385,18 +385,23 @@ class HICO_HOI(nn.Module):
         pool5_H = self.crop_pool_layer(head, H_boxes, 'Crop_H')
         cboxes = cboxes[:num_stop]
 
-        pool5_HO = self.extract_pool5_HO(head, cboxes, is_training, pool5_O, None, name='ho_')
+        pool5_HO = self.extract_pool5_HO(head, cboxes, H_boxes[:num_stop], is_training, pool5_O, None, name='ho_')
+        # print('pool5_O:', pool5_O.shape)
         # further resnet feature
         fc7_H_raw, fc7_O_raw = self.res5(pool5_H, pool5_O, None, is_training, 'res5')
+        # print('fc7_H_raw', fc7_H_raw.shape)
         # should be 7x7
         fc7_H = torch.mean(fc7_H_raw, dim=[2, 3])
         fc7_O = torch.mean(fc7_O_raw, dim=[2, 3])
+        # print(fc7_O.mean(), fc7_H.mean())
+        # import ipdb
+        # ipdb.set_trace()
         fc7_H_pos = fc7_H[:num_stop]
         fc7_O_pos = fc7_O[:num_stop]
         fc7_HO_raw = self.res5_ho(pool5_HO, is_training, 'res5')
 
         fc7_HO = None if fc7_HO_raw is None else torch.mean(fc7_HO_raw, dim=[2, 3])
-
+        # print('fc7_HO', fc7_HO.shape)
         # if not is_training:
         #     # add visualization for test
         #     self.add_visual_for_test(fc7_HO_raw, fc7_H_raw, fc7_O_raw, head, is_training, pool5_O)
@@ -408,7 +413,7 @@ class HICO_HOI(nn.Module):
         #                              'orth_H': fc7_H, 'orth_O': fc7_O})
 
         fc7_SHsp = self.head_to_tail_sp(fc7_H, fc7_O, sp, is_training, 'fc_HO')
-        cls_prob_sp = self.region_classification_sp(fc7_SHsp, is_training, None, 'classification')
+        cls_score_sp = self.region_classification_sp(fc7_SHsp, is_training, None, 'classification')
 
         # print('verbs')
         if self.model_name.__contains__('VCL_'):
@@ -421,12 +426,30 @@ class HICO_HOI(nn.Module):
             self.intermediate['fc7_verbs'] = fc7_verbs[:num_stop]
 
             fc7_vo = self.head_to_tail_ho(fc7_O[:num_stop], fc7_verbs[:num_stop], fc7_O_raw, fc7_verbs_raw, is_training, 'fc_HO')
-            cls_prob_hoi = self.region_classification_ho(fc7_vo, is_training, None, 'classification')
+            # print(fc7_vo.mean(), fc7_vo.std())
+            cls_score_hoi = self.region_classification_ho(fc7_vo, is_training, None, 'classification')
         else:
-            cls_prob_hoi = None
+            cls_score_hoi = None
 
         self.score_summaries.update(self.predictions)
+        #
+        # # label_HO = gt_class_HO_for_verbs
+        # label_HO = action_HO[:num_stop]
+        # label_sp = action_HO
+        #
+        # sp_cross_entropy = self.loss(cls_score_sp, label_sp)
+        # hoi_cross_entropy = self.loss(cls_score_hoi, label_HO)
+        #
+        # return sp_cross_entropy + hoi_cross_entropy
 
+    def convert_rois(self, H_boxes, head, img_h, img_w):
+        scale_w = head.shape[2] / img_w
+        scale_h = head.shape[3] / img_h
+        H_boxes[:, 1] = H_boxes[:, 1] * scale_w
+        H_boxes[:, 2] = H_boxes[:, 2] * scale_w
+        H_boxes[:, 3] = H_boxes[:, 3] * scale_h
+        H_boxes[:, 4] = H_boxes[:, 4] * scale_h
+        return H_boxes
     # def add_visual_for_test(self, fc7_HO_raw, fc7_H_raw, fc7_O_raw, head, is_training, pool5_O):
     #     self.test_visualize['fc7_H_raw'] = tf.expand_dims(tf.reduce_mean(fc7_H_raw, axis=-1), axis=-1)
     #     self.test_visualize['fc7_O_raw'] = tf.expand_dims(tf.reduce_mean(fc7_O_raw, axis=-1), axis=-1)
@@ -516,12 +539,12 @@ class HICO_HOI(nn.Module):
         num_stop = self.get_num_stop(H_num, H_boxes)
         return num_stop
 
-    def extract_pool5_HO(self, head, cboxes, is_training, pool5_O, head_mask = None, name=''):
+    def extract_pool5_HO(self, head, cboxes, H_boxes, is_training, pool5_O, head_mask = None, name=''):
         if self.model_name.__contains__('_union'):
             pool5_HO = self.crop_pool_layer(head, cboxes, name + 'Crop_HO')
         elif self.model_name.__contains__('_humans'):
-            print("humans")
-            pool5_HO = self.crop_pool_layer(head, self.H_boxes[:self.get_num_stop()],name +  'Crop_HO_h')
+            # print("humans")
+            pool5_HO = self.crop_pool_layer(head, H_boxes, name +  'Crop_HO_h')
         else:
             # pool5_HO = self.crop_pool_layer(head, cboxes, 'Crop_HO')
             pool5_HO = None

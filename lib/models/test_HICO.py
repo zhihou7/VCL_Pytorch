@@ -8,6 +8,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from PIL import Image
+
 from ult.tools import get_convert_matrix
 from ult.config import cfg
 from ult.timer import Timer
@@ -26,11 +28,16 @@ object_num_thres = 4
 
 def get_blob(image_id):
     im_file  = cfg.DATA_DIR + '/' + 'hico_20160224_det/images/test2015/HICO_test2015_' + (str(image_id)).zfill(8) + '.jpg'
-    im       = cv2.imread(im_file)
-    im_orig  = im.astype(np.float32, copy=True)
-    im_orig -= cfg.PIXEL_MEANS
-    im_shape = im_orig.shape
-    im_orig  = im_orig.reshape(1, im_shape[0], im_shape[1], 3)
+    # im       = cv2.imread(im_file)
+    # im_orig  = im.astype(np.float32, copy=True)
+    # im_orig -= cfg.PIXEL_MEANS
+    # im_orig /= 255
+    img = Image.open(im_file)
+    im_orig = img.convert('RGB')
+    # im_orig /= 255
+    # im_orig -= cfg.PIXEL_MEANS
+    im_shape = (img.size[1], img.size[0], 3)
+    # im_orig  = im_orig.reshape(1, im_shape[0], im_shape[1], 3)
     return im_orig, im_shape
 
 def test_net_data_api1(sess, net, output_dir, h_box, o_box, o_cls, h_score, o_score, image_id):
@@ -243,7 +250,6 @@ def obtain_test_dataset1(object_thres, human_thres, dataset_name='test2015', tes
             # image_id = int(line[-9:-4])
             # save image information
             im_orig, im_shape = get_blob(image_id)
-            mask_all = np.zeros(shape=(1, im_shape[0], im_shape[1], 1), dtype=np.float32)
             blobs = {}
 
             blobs['H_num'] = 0
@@ -381,7 +387,7 @@ def obtain_obj_boxes(test_type):
         # Test_RCNN = pickle.load(open('/opt/data/private/pkl/Test_HICO_res101_rex2_0059999_FPN_hico.pkl', "rb"))
         #
         print('Default ===========')
-        Test_RCNN = pickle.load(open(cfg.DATA_DIR + '/' + 'Test_Faster_RCNN_R-50-PFN_2x_HICO_DET.pkl', "rb"),
+        Test_RCNN = pickle.load(open(cfg.DATA_DIR + '/' + 'Test_HICO_res101_x2_2_0064999_FPN_hico.pkl', "rb"),
                                 encoding='latin1')
     return Test_RCNN
 

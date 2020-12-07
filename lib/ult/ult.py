@@ -20,6 +20,8 @@ import pickle
 import random
 from random import randint
 import cv2
+from PIL import Image
+
 from .config import cfg
 
 def bbox_trans(human_box_ori, object_box_ori, ratio, size = 64):
@@ -1002,13 +1004,16 @@ def generator2(Trainval_GT, Trainval_N, Pos_augment, Neg_select, augment_type, w
             if not os.path.exists(im_file):
                 print('not exist', im_file)
                 continue
-            im = cv2.imread(im_file)
-            if im is None:
+            # im = cv2.imread(im_file)
+            if not os.path.exists(im_file):
                 print('node', im_file)
                 continue
-            im_orig = im.astype(np.float32, copy=True)
+            # im_orig = im.astype(np.float32, copy=True)
+            img = Image.open(im_file)
+            im_orig = img.convert('RGB')
+            # im_orig /= 255
             # im_orig -= cfg.PIXEL_MEANS
-            im_shape = im.shape
+            im_shape = (img.size[1], img.size[0], 3)
             import os
             # print('generate batch read image:', time.time() - st, "average;", avg_time)
             for i in gt_ids:
@@ -1062,7 +1067,7 @@ def generator2(Trainval_GT, Trainval_N, Pos_augment, Neg_select, augment_type, w
             action_HO = np.concatenate(action_HO_list, axis=0)
             num_pos = num_pos_list
             im_orig = np.expand_dims(im_orig, axis=0)
-            im_orig = im_orig.transpose([0, 3, 1, 2])
+            # im_orig = im_orig.transpose([0, 3, 1, 2])
             Pattern = Pattern.transpose([0, 3, 1, 2]).astype(np.float32)
             Human_augmented = Human_augmented.astype(np.float32)
             Object_augmented = Object_augmented.astype(np.float32)

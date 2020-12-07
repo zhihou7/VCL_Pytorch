@@ -12,11 +12,11 @@ from __future__ import print_function
 import os
 import _init_paths
 from torch.utils.data import Dataset, DataLoader
+from torchvision.transforms import transforms, ToTensor
 
 from networks.ResNet50_HICO_torch import HICO_HOI
 from ult.timer import Timer
 
-os.environ['DATASET'] = 'HICO'
 
 import numpy as np
 import argparse
@@ -47,19 +47,13 @@ def _init_fn(worker_id):
 class HicoDataset(Dataset):
 
     def __init__(self, Pos_augment=15, Neg_select=60, augment_type=0, with_pose=False, zero_shot_type=0,
-                 large_neg_for_ho=False, isalign=False, epoch=0):
+                 large_neg_for_ho=False, isalign=False, epoch=0, transform=None):
 
-        if with_pose:
-            Trainval_GT = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_GT_HICO_with_pose.pkl', "rb"),
-                                      encoding='latin1')
-            Trainval_N = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_Neg_HICO_with_pose.pkl', "rb"),
-                                     encoding='latin1')
-        else:
-            Trainval_GT = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_GT_HICO.pkl', "rb"), encoding='latin1')
-            Trainval_N = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_Neg_HICO.pkl', "rb"), encoding='latin1')
 
-        g = generator2
+        Trainval_GT = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_GT_HICO.pkl', "rb"), encoding='latin1')
+        Trainval_N = pickle.load(open(cfg.DATA_DIR + '/' + 'Trainval_Neg_HICO.pkl', "rb"), encoding='latin1')
 
+        self.transform = transform
         if with_pose:
             pattern_channel = 3
         else:
@@ -74,7 +68,9 @@ class HicoDataset(Dataset):
     def __getitem__(self, idx):
         im_orig, image_id, num_pos, Human_augmented, Object_augmented, action_HO, Pattern = next(self.generator)
         im_orig1, image_id1, num_pos1, Human_augmented1, Object_augmented1, action_HO1, Pattern1 = next(self.generator)
-
+        if self.transform:
+            im_orig = self.transform(im_orig[0])
+            im_orig1 = self.transform(im_orig1[0])
         return im_orig, image_id, num_pos, Human_augmented, Object_augmented, action_HO, Pattern, \
                im_orig1, image_id1, num_pos1, Human_augmented1, Object_augmented1, action_HO1, Pattern1
 
@@ -87,7 +83,7 @@ def parse_args():
                         default=1500010, type=int)
     parser.add_argument('--model', dest='model',
                         help='Select model',
-                        default='VCL_union_l2_rew_aug5_3_x5new_res101', type=str)
+                        default='VCL_base_union_l2_rew_aug5_3_x5new_res101', type=str)
     parser.add_argument('--Pos_augment', dest='Pos_augment',
                         help='Number of augmented detection for each one. (By jittering the object detections)',
                         default=15, type=int)
@@ -133,14 +129,6 @@ if __name__ == '__main__':
 
     Trainval_GT = None
     Trainval_N = None
-
-    np.random.seed(cfg.RNG_SEED)
-    if args.model.__contains__('res101'):
-        weight = cfg.ROOT_DIR + '/Weights/res101_faster_rcnn_iter_1190000.ckpt'
-    else:
-        weight = cfg.ROOT_DIR + '/Weights/res50_faster_rcnn_iter_1190000.ckpt'
-
-    print(weight)
     tb_dir = cfg.ROOT_DIR + '/logs/' + args.model + '/'
 
     # output directory where the models are saved
@@ -170,22 +158,27 @@ if __name__ == '__main__':
                           augment_type=augment_type,
                           with_pose=with_pose,
                           zero_shot_type=zero_shot_type,
+                          transform=transforms.Compose([ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])]),
                           )
     dataloader_train = DataLoader(dataset, 1,
-                                  shuffle=False, num_workers=2,
+                                  shuffle=False, num_workers=1,
                                   worker_init_fn=_init_fn)  # num_workers=batch_size
     trainables = []
     not_trainables = []
     for name, p in model.named_parameters():
 
-        if name.split('.')[0] == 'Conv_pretrain' or name.__contains__('base_model.1') \
-                or name.__contains__('base_model.5') or name.__contains__('base_model.6')\
-                or name.__contains__('base_model.7'):
+        if name.__contains__('base_model.0') or name.__contains__('base_model.1') \
+                or name.__contains__('base_model.4') or name.__contains__('bn')\
+                or name.__contains__('HOI_MLP.1') or name.__contains__('sp_MLP.1')\
+                or name.__contains__('HOI_MLP.5') or name.__contains__('sp_MLP.5'):
+            #BN
             p.requires_grad = False
             not_trainables.append(p)
-            print('not train', name)
+            print('not train', name, p.mean())
+
         else:
-            print('train', name)
+            print('train', name, p.mean())
             p.requires_grad= True
             trainables.append(p)
 
@@ -204,8 +197,8 @@ if __name__ == '__main__':
     optimizer = optim.SGD(params=trainables, lr=cfg.TRAIN.LEARNING_RATE * 10,
                           momentum=cfg.TRAIN.MOMENTUM, weight_decay=cfg.TRAIN.WEIGHT_DECAY)
     # lambda1 = lambda epoch: 1.0 if epoch < 10 else (10 if epoch < 28 else 1)
-    lambda1 = lambda epoch: 1.0 if epoch < 10 else (0.1 if epoch < 28 else 1)
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda1)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, cfg.TRAIN.GAMMA)
+
     device = torch.device("cuda")
     model.to(device)
     timer = Timer()
@@ -245,7 +238,7 @@ if __name__ == '__main__':
 
         optimizer.zero_grad()
         # print(im_orig.shape, Human_augmented.shape)
-        model(im_orig[0], image_id[0], num_pos[0], Human_augmented[0], Object_augmented[0], action_HO[0], Pattern[0],
+        model(im_orig, image_id[0], num_pos[0], Human_augmented[0], Object_augmented[0], action_HO[0], Pattern[0],
               True)
         num_stop = model.get_num_stop(num_pos[0], Human_augmented[0])
         model.add_loss(action_HO[0], num_stop, device)
@@ -253,10 +246,10 @@ if __name__ == '__main__':
         O_features.append(model.intermediate['fc7_O'][:comp_num_stop])
         V_features.append(model.intermediate['fc7_verbs'][:comp_num_stop])
         num_stop_list.append(comp_num_stop)
-        tower_losses.append(model.losses['total_loss'])
+        final_loss = model.losses['total_loss']
         gt_class_HOI.append(action_HO[0])
 
-        model(im_orig1[0], image_id1[0], num_pos1[0], Human_augmented1[0], Object_augmented1[0], action_HO1[0], Pattern1[0],
+        model(im_orig1, image_id1[0], num_pos1[0], Human_augmented1[0], Object_augmented1[0], action_HO1[0], Pattern1[0],
               True)
         num_stop = model.get_num_stop(num_pos1[0], Human_augmented1[0])
         model.add_loss(action_HO1[0], num_stop, device)
@@ -264,7 +257,7 @@ if __name__ == '__main__':
         O_features.append(model.intermediate['fc7_O'][:comp_num_stop])
         V_features.append(model.intermediate['fc7_verbs'][:comp_num_stop])
         num_stop_list.append(comp_num_stop)
-        tower_losses.append(model.losses['total_loss'])
+        final_loss += model.losses['total_loss']
         gt_class_HOI.append(action_HO1[0])
 
         if not model.model_name.__contains__('_base'):
@@ -281,10 +274,12 @@ if __name__ == '__main__':
 
             vcl_loss = cal_vcl_loss(model, O_feats, V_feats, composite_hoi_label, device)
             tower_losses.append(vcl_loss * 0.5)
+            final_loss += vcl_loss * 0.5
         else:
             pass
 
-        final_loss = torch.sum(tower_losses)
+        # for item in tower_losses
+        # final_loss = torch.add(tower_losses)
         final_loss.backward()
 
         for p in model.parameters():
@@ -292,7 +287,7 @@ if __name__ == '__main__':
         optimizer.step()
         i += 1
         timer.toc()
-        if i % (cfg.TRAIN.SNAPSHOT_ITERS * 5) == 0 or i == 10:
+        if i % (cfg.TRAIN.SNAPSHOT_ITERS * 5) == 0 or i == 10 or i == 10000:
             torch.save({
                 'iteration': i,
                 'state_dict': model.state_dict(),
