@@ -9,6 +9,8 @@ Welcome to create issues if you have any questions. The code built from iCAN. Th
 
 The preliminary code for HICO-DET is already implemented. Next, I'll debug the code. Compared to the Code of Tensorflow, this version of code is easier to read.
 
+***Noticeably, this code can not achieve the performance produced by tensorflow code although I check the two repositories over and over agin.*** The Pytorch version can not converge as expected (It strangely does not converge in fact). [Here](https://discuss.pytorch.org/t/the-difference-between-tf-image-crop-and-resize-vs-torchvision-ops-roi-align/106825) is one of the difference between Pytorch and Tensorflow. If you are interested in this problem, feel free to contact me.
+
 
 ## Citation
 If you find our work useful in your research, please consider citing:
